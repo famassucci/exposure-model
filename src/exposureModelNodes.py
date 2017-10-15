@@ -1,4 +1,5 @@
 import math
+from exposureModelInference import *
 
 class inferenceNode ():
     '''
