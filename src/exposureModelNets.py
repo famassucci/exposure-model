@@ -423,25 +423,33 @@ class inferenceGraph (nx.Graph):
 
     def label_propagation (self, tol = 1.e-3, max_iter = 100):
         ''' 
-        Label propagation implementation
+        A method for label propagation implementation.
+        It iterates equation until convergence and up
+        to a maximum number of iterations.
+        
+        Keyword arguments
+        i. tol : tolerance parameter to check for convergence
+        ii. max_iter : maximum number of iterations to perform
         '''
         
+        ## initialise parameters
         error = 1.
         iter = 0
-
+        ## loop until convergence/max iter is reached
         while error > tol and iter < max_iter:
             for node in self.unobserved:
                 
                 l0 = 0.
                 l1 = 0.
+                ## compute labels
                 for neigh in self.neighbors(node):
-                    
                     l0 += (1.-neigh.lp.label)/neigh.lp.norm
                     l1 += neigh.lp.label/neigh.lp.norm
                     
                 node.lp.label_new = l1/( l0 + l1)
 
             error = 0.
+            ## update labels
             for node in self.unobserved:
                 error += math.fabs(node.lp.label - node.lp.label_new)
                 node.lp.label = node.lp.label_new
@@ -450,13 +458,38 @@ class inferenceGraph (nx.Graph):
     
     def get_viable_subgraph (self, method, EPSILON=1.e-3):
         '''
-        A method to extract a graph were all observed unperturbed nodes are removed.
+        A method to extract a graph were all observed unperturbed
+        nodes are removed. This method is useful to reduce the graph to
+        a minimal useful set, since observed unperturbed nodes are
+        unaffected by the unkown perturbation. It is used by default
+        to make inference via shortest paths.
+        
+        Mandatory arguments
+        i. method : a method for edge weight assignation.
+                    Either 'bp', 'lp' or 'sp'.
+        Keyword arguments
+        i. EPSILON : the square root of the possible minimal edge weight
+        Returns
+        i. H : a networkx graph
         '''
+        
+        METHODS_LIST = ['bp','lp','sp']
+        ## raise error for unknown methods
+        if not (method in METHODS_LIST):
+            message = 'Unknown method %s.\n Method should be one of %s' %(method, ', '.join(METHODS_LIST) )
+
+            raise TypeError(message)
+        ## get all observed unperturbed nodes
         to_remove = list( set(self.observed) - set(self.perturbed) )
+        ## initialise a networkx graph
         H = nx.Graph()
     
         for x,y in self.edges():
+            ## add an edge to the graph H ony if neither end is
+            ## an unperturbed observed node
             if x not in to_remove and y not in to_remove:
+                ## assign the weight of the graph according
+                ## to the inference method
                 if method == 'bp':
                     weight= ((1.- x.bp.psi)+EPSILON)*((1.- y.bp.psi)+EPSILON)
                     H.add_edge(x,y, weight= weight)
@@ -467,15 +500,9 @@ class inferenceGraph (nx.Graph):
                 
                 elif method == 'sp':
                     H.add_edge(x,y)
-
-                else:
-                    METHODS_LIST = ['bp','lp','sp']
-                    message = 'Unknown method %s.\n Method should be one of %s' %(method, ', '.join(METHODS_LIST) )
-
-                    raise TypeError(message)
-
-
+        ## delete the array
         del to_remove
+        ## add possible unobserved nodes that were left out
         for extra_node in self.unobserved:
             if extra_node not in H.nodes():
                 H.add_node(extra_node)
@@ -485,45 +512,77 @@ class inferenceGraph (nx.Graph):
         
     def shortest_paths (self, Hsapiens=False):
         '''
-        Implement inference via shortes paths
+        A method to implement inference via shortest paths.
+        This seeks all shortest paths among pair of observed
+        perturbed nodes and it associates, to each unobserved
+        node, a score proportional to the number of paths
+        passing through it.
+        Keyword arguments
+        i. Hsapiens : whether the network is the reconstruction
+                    of the human metabolism.
         '''
-        
+        import collections
+        ## get a graph whose observed unperturbed nodes
+        ## are removed
         H = self.get_viable_subgraph('sp')
         pert_path = set([])
-        bifurcation_nodes = {}
+        bifurcation_nodes = collections.defaultdict(int)
         bifurcation_paths = []
 
+        ## initialise scores
         for node in self.unobserved:
             node.sp.score = 0.
         
         ix = 0
+        ## get the set of observed perturbed nodes
         pert_obs_sp = list( set(self.perturbed) & set(self.observed) )
 
+        ## loop over pairs of observed
+        ## perturbed paths
         for n1 in pert_obs_sp[:-1]:
             for n2 in pert_obs_sp[ix+1:]:
-            
+                
                 try:
+                    ## get all shortest paths between these 2 nodes
                     paths=list( nx.all_shortest_paths (H,n1,n2) )
+                    ## compute a normalisation proportional
+                    ## to the number of paths between the nodes
                     norm = float(len(paths))
-
+                    ## for each path
                     for path in paths:
+                        ## for each node in the path
                         for node in path:
+                            ## add a score inv. proportional to
+                            ## the number of shortest paths
                             node.sp.score += 1./norm
+                            
+                            ## THE FOLLOWING CODE IS USED
+                            ## TO INFER ACTUAL PERTURBATION PATHS,
+                            ## NOT TO COMPUTE NODE SCORES
                             if norm != 1.:
-                                if node not in bifurcation_nodes:
-                                    bifurcation_nodes[node] = int(node in pert_path)
+                                ## flag that the node participates in a
+                                ## path for a pair with multiple paths
                                 bifurcation_nodes[node] += 1
                                 
                             else:
+                                ## otherwise add it to the set
+                                ## perturbation path
                                 pert_path.add(node)
                             
                     if norm != 1.:
                         bifurcation_paths.append(paths)
-                    
+                ## ignore cases where no shortest
+                ## path can be found.
                 except nx.exception.NetworkXNoPath:
                     continue
             ix += 1
             
+        ## THE FOLLOWING CODE IS USED
+        ## TO INFER ACTUAL PERTURBATION PATHS,
+        ## NOT TO COMPUTE NODE SCORES
+        ## add to the inferred perturbation
+        ## the nodes participating in most of
+        ## the multiple paths
         for bifurcation in bifurcation_paths:
             scores = []
             for a_path in bifurcation:
@@ -546,9 +605,19 @@ class inferenceGraph (nx.Graph):
 
     def auc (self, method='all'):
         '''
-        compute the AUC of the inference
+        A method to compute the AUC of the possible
+        inference methods implemented.
+        The AUC is computed by computing the fraction of true
+        perturbed unobserved ranked above true unperturbed unobserved.
+        Keyword arguments
+        i. method : The method for which the AUC should be
+                    evaluated. Either 'bp','lp','sp', 'all'.
+        Returns
+        i.a a specific auc if method != 'all'
+        i.b all possible auc if method == 'all'
         '''
         
+        ## raise an error for unknown methods
         METHODS_LIST = ['bp','lp','sp', 'all']
 
         if method.lower() not in METHODS_LIST:
@@ -556,17 +625,21 @@ class inferenceGraph (nx.Graph):
             raise TypeError(message)
 
 
-
+        ## perturbed unobserved nodes
         pert_unobs = set(self.unobserved) & set(self.perturbed)
+        ## unperturbed unobserved nodes
         unpert_unobs = set(self.unobserved) - pert_unobs
+        ## normalisation factor
         norm = len(pert_unobs) * len(unpert_unobs)
-
-
         norm = float(norm)
+        ## initialise parameters
         auc_bp = 0.
         auc_lp = 0.
         auc_sp = 0.
 
+        ## for each method, check how many
+        ## true perturbed have an higher score
+        ## than true unerturbed
         for pert in pert_unobs:
             for unpert in unpert_unobs:
             
@@ -585,11 +658,11 @@ class inferenceGraph (nx.Graph):
                     auc_sp += 1.
                 elif pert.sp.score == unpert.sp.score:
                     auc_sp += 0.5
-
+        ## normalise the score
         auc_bp /= norm
         auc_lp /= norm
         auc_sp /= norm
-
+        ## return the corresponding auc
         if method.lower() == 'bp':
             return auc_bp
 
@@ -605,25 +678,41 @@ class inferenceGraph (nx.Graph):
 
     def recall_precision(self, method='all'):
         '''
-        compute the recall and precision of the inference
+        A method to compute the recall and precision
+        of the possible inference protocols.
+        Recall & precision are an alternative metric to AUC,
+        being defined as:
+        recall = true positive / (true positive + false negative)
+        precision = true positive / (true positive + false positive)
+        Keyword arguments
+        i. method : the inference method for which recall/precision
+                    will be computed
+        Returns
+        i.a recall & precision for a specific inference if method != 'all'
+        i.b all possible recall & precision if method == 'all'
         '''
-        
+        ## raise an error if method is unknown
         METHODS_LIST = ['bp','lp','sp', 'all']
         
         if method.lower() not in METHODS_LIST:
             message = 'Unknown method %s.\n Method should be one of %s' %(method, ', '.join(METHODS_LIST) )
             raise TypeError(message)
 
-
+        ## get possible sets
         perturbed_and_observed = set(self.observed) & set(self.perturbed)
+        perturbed_unobserved =  set(self.perturbed) - set(self.observed)
+        
+        ## set a threshold for deciding what is inferred as positive
         expected_perturbed_frac = math.ceil( float( len(perturbed_and_observed) ) /float( len (self.observed) ) *float( len (self.unobserved) ) )
         expected_perturbed_frac = int(expected_perturbed_frac)
-        perturbed_unobserved =  set(self.perturbed) - set(self.observed)
+        
+        
 
         recall = {}
         precision = {}
         nodes = self.unobserved
         
+        ## compute recall and precision for various inference methods
         if method in ['bp', 'all']:
             nodes.sort(key = lambda x : x.bp.psi, reverse = True)
             true_positive = set( nodes[:expected_perturbed_frac] ) & perturbed_unobserved
@@ -643,7 +732,7 @@ class inferenceGraph (nx.Graph):
             recall['sp'] = float( len( true_positive) ) / float( len( perturbed_unobserved))
             precision['sp'] = float( len( true_positive) ) / float( expected_perturbed_frac)
 
-    
+        ## return results
         if method == 'all':
             return recall, precision
 
@@ -879,7 +968,7 @@ class inferenceGraph (nx.Graph):
 
     def hibiscus_setup (self, fraction):
         '''
-        A method to initialise the network according to the exerimental results
+        A method to initialise the network according to the experimental results
         on human metabolism
         '''
         del self.perturbed[:]
