@@ -2,7 +2,7 @@ import math, random
 import networkx as nx
 import cPickle as pickle
 from exposureModelNodes import *
-from exposureModelinference import *
+from exposureModelInference import *
 
 class inferenceGraph (nx.Graph):
     '''
